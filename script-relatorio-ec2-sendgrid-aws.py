@@ -839,23 +839,37 @@ ax.set_axisbelow(True)
 _salvar(g_custo_regiao)
 
 
-# Dados de gastos principais (AWS Cost Explorer)
-principais_gastos = {
-    'Serviço': [
-        'EC2 - Other',
-        'Amazon Elastic Compute Cloud - Compute',
-        'Amazon RDS',
-        'Amazon Lightsail',
-        'VPC',
-        'S3',
-        'Route 53',
-        'Tax (impostos)',
-        'Amazon DevOps Guru'
-    ],
-    'USD': [196.53, 647.27, 137.42, 39.03, 33.6, 4.44, 1.07, 149.15, 0.81]
-}
-principais_gastos['BRL'] = [round(valor * TAXA_CAMBIO, 2) for valor in principais_gastos['USD']]
-df_gastos = pd.DataFrame(principais_gastos)
+# ----------------------------------------------------
+# 3. COLETAR TODOS OS CUSTOS POR SERVIÇO (Cost Explorer)
+# ----------------------------------------------------
+_dados_gastos = []
+_erro_gastos  = None
+
+try:
+    _ce_gastos = session.client('ce', region_name='us-east-1')
+    _resp_gastos = _ce_gastos.get_cost_and_usage(
+        TimePeriod={'Start': _inicio_mes.strftime('%Y-%m-%d'),
+                    'End':   (_now + timedelta(days=1)).strftime('%Y-%m-%d')},
+        Granularity='MONTHLY',
+        GroupBy=[{'Type': 'DIMENSION', 'Key': 'SERVICE'}],
+        Metrics=['BlendedCost'],
+    )
+    for group in _resp_gastos['ResultsByTime'][0].get('Groups', []):
+        _servico = group['Keys'][0]
+        _custo   = float(group['Metrics']['BlendedCost']['Amount'])
+        if _custo > 0:
+            _dados_gastos.append({
+                'Serviço': _servico,
+                'USD':     round(_custo, 2),
+                'BRL':     round(_custo * TAXA_CAMBIO, 2),
+            })
+except Exception as e:
+    _erro_gastos = str(e)
+    print(f'Aviso: Nao foi possivel coletar custos por servico via Cost Explorer: {e}')
+
+df_gastos = pd.DataFrame(_dados_gastos) if _dados_gastos else pd.DataFrame(
+    columns=['Serviço', 'USD', 'BRL']
+)
 
 # ----------------------------------------------------
 # 4. EXPORTAR PARA EXCEL
@@ -1485,9 +1499,14 @@ with ExcelWriter(excel_path, engine='xlsxwriter') as writer:
     gastos_ws.write(_r_tot_ce, 2, round(_total_ce * TAXA_CAMBIO, 2),    g_tot_brl)
     gastos_ws.write(_r_tot_ce, 3, 100.0,                                g_tot_pct)
 
-    gastos_ws.merge_range(_r_tot_ce + 1, 0, _r_tot_ce + 1, 3,
-        '* Valores extraidos manualmente do AWS Cost Explorer. Atualizar mensalmente antes de executar o script.',
-        g_note_fmt)
+    if _erro_gastos:
+        gastos_ws.merge_range(_r_tot_ce + 1, 0, _r_tot_ce + 1, 3,
+            f'* Erro ao coletar dados do Cost Explorer: {_erro_gastos}',
+            g_note_fmt)
+    else:
+        gastos_ws.merge_range(_r_tot_ce + 1, 0, _r_tot_ce + 1, 3,
+            f'* Coletado automaticamente do AWS Cost Explorer. Periodo: {_inicio_mes.strftime("%d/%m/%Y")} a {_now.strftime("%d/%m/%Y")}.',
+            g_note_fmt)
 
     # ============================================================
     # SECAO 2 — Custos Estimados pelo Script
@@ -1543,7 +1562,7 @@ with ExcelWriter(excel_path, engine='xlsxwriter') as writer:
 
     _ce_ec2_compute = _ce_val('Compute Cloud - Compute')
     _ce_ec2_other   = _ce_val('EC2 - Other')
-    _ce_rds         = _ce_val('RDS')
+    _ce_rds         = _ce_val('Relational Database')
 
     _cmp_rows = [
         ('EC2 — Compute',        _ce_ec2_compute,                  _total_ec2_compute),
