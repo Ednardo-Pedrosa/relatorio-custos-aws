@@ -1,0 +1,1 @@
+pip install boto3 pandas matplotlib seaborn sendgrid xlsxwriter openpyxl python-dotenv requests
