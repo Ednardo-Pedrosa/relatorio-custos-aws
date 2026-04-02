@@ -15,6 +15,9 @@ from dotenv import load_dotenv
 
 load_dotenv(override=True)
 
+# Diretório base sempre relativo ao script (funciona via cron ou chamada manual)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 SENDGRID_API_KEY    = os.environ['SENDGRID_API_KEY']
 SENDGRID_FROM_EMAIL = os.environ['SENDGRID_FROM_EMAIL']
 AWS_PROFILE         = os.environ['AWS_PROFILE']
@@ -673,7 +676,7 @@ if not df_snapshots.empty:
 
 # Salvar CSV (apenas EC2)
 data = datetime.now().strftime('%Y-%m-%d')
-arquivo_csv = f'Relatório Infraestrutura AWS EC2 - Logbit-{data}.csv'
+arquivo_csv = os.path.join(BASE_DIR, f'Relatório Infraestrutura AWS EC2 - Logbit-{data}.csv')
 df.to_csv(arquivo_csv, index=False)
 
 # Taxa de câmbio e totais
@@ -700,7 +703,7 @@ def _salvar(nome):
     plt.close()
 
 # 1. Resumo geral de custos (EC2 / RDS / Snapshots)
-g_resumo = 'g_resumo.png'
+g_resumo = os.path.join(BASE_DIR, 'g_resumo.png')
 _labels_res = ['EC2', 'RDS', 'Snapshots EBS']
 _vals_res   = [round(total_ec2_usd, 2), round(total_rds_usd, 2), round(total_snap_usd, 2)]
 fig, ax = plt.subplots(figsize=(12, 3.5))
@@ -718,7 +721,7 @@ ax.set_axisbelow(True)
 _salvar(g_resumo)
 
 # 2. EC2 por região e status
-g_regiao_status = 'g_regiao_status.png'
+g_regiao_status = os.path.join(BASE_DIR, 'g_regiao_status.png')
 fig, ax = plt.subplots(figsize=(10, 5))
 sns.countplot(data=df, x='Região', hue='STATUS',
               palette={'Running': '#70AD47', 'Stopping': '#C00000'},
@@ -735,7 +738,7 @@ _salvar(g_regiao_status)
 g_top_ec2 = None
 _df_running = df[df['STATUS'] == 'Running']
 if not _df_running.empty:
-    g_top_ec2 = 'g_top_ec2.png'
+    g_top_ec2 = os.path.join(BASE_DIR, 'g_top_ec2.png')
     _top = _df_running.nlargest(5, 'Valor Mensal Estimado (USD)').copy()
     _top['Label'] = _top['NOME'] + '\n(' + _top['TIPO'] + ')'
     _max_top = _top['Valor Mensal Estimado (USD)'].max()
@@ -759,7 +762,7 @@ g_custo_tipo_ec2 = None
 _custo_tipo = df.groupby('TIPO')['Valor Mensal Estimado (USD)'].sum()
 _custo_tipo = _custo_tipo[_custo_tipo > 0].sort_values(ascending=False)
 if not _custo_tipo.empty:
-    g_custo_tipo_ec2 = 'g_custo_tipo_ec2.png'
+    g_custo_tipo_ec2 = os.path.join(BASE_DIR, 'g_custo_tipo_ec2.png')
     _n = len(_custo_tipo)
     _cores = PALETTE[:_n] if _n <= len(PALETTE) else PALETTE * (_n // len(PALETTE) + 1)
     fig, ax = plt.subplots(figsize=(10, 5))
@@ -780,7 +783,7 @@ if not _custo_tipo.empty:
 # 5. EC2 running por tipo (barras)
 g_tipo_ligados = None
 if not _df_running.empty:
-    g_tipo_ligados = 'g_tipo_ligados.png'
+    g_tipo_ligados = os.path.join(BASE_DIR, 'g_tipo_ligados.png')
     _order = _df_running['TIPO'].value_counts().index
     fig, ax = plt.subplots(figsize=(10, 5))
     sns.countplot(data=_df_running, x='TIPO', order=_order,
@@ -797,7 +800,7 @@ if not _df_running.empty:
 g_rds_engine = None
 _rds_avail = df_rds[df_rds['STATUS'] == 'Available']
 if not _rds_avail.empty:
-    g_rds_engine = 'g_rds_engine.png'
+    g_rds_engine = os.path.join(BASE_DIR, 'g_rds_engine.png')
     _custo_eng = _rds_avail.groupby('ENGINE')['Valor Mensal Estimado (USD)'].sum().sort_values(ascending=False)
     _max_eng = _custo_eng.max()
     fig, ax = plt.subplots(figsize=(10, 5))
@@ -816,7 +819,7 @@ if not _rds_avail.empty:
     _salvar(g_rds_engine)
 
 # 7. Custo estimado por região (EC2 vs RDS)
-g_custo_regiao = 'g_custo_regiao.png'
+g_custo_regiao = os.path.join(BASE_DIR, 'g_custo_regiao.png')
 _ec2_reg  = df.groupby('Região')['Valor Mensal Estimado (USD)'].sum()
 _rds_reg  = df_rds.groupby('Região')['Valor Mensal Estimado (USD)'].sum()
 _regioes_all = sorted(set(list(_ec2_reg.index) + list(_rds_reg.index)))
@@ -885,7 +888,7 @@ total_geral_brl = round(total_geral_usd * TAXA_CAMBIO, 2)
 # ----------------------------------------------------
 # 4. EXPORTAR PARA EXCEL
 # ----------------------------------------------------
-excel_path = f'Relatório Infraestrutura AWS EC2 e RDS - Logbit-{data}.xlsx'
+excel_path = os.path.join(BASE_DIR, f'Relatório Infraestrutura AWS EC2 e RDS - Logbit-{data}.xlsx')
 
 with ExcelWriter(excel_path, engine='xlsxwriter') as writer:
 
