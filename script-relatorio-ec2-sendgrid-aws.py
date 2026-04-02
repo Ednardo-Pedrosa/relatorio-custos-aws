@@ -871,6 +871,17 @@ df_gastos = pd.DataFrame(_dados_gastos) if _dados_gastos else pd.DataFrame(
     columns=['Serviço', 'USD', 'BRL']
 )
 
+# Identificar servicos NAO cobertos pelo script (para complementar o total)
+_NOMES_COBERTOS = ['Elastic Compute Cloud - Compute', 'EC2 - Other', 'Relational Database Service']
+_mask_cobertos = df_gastos['Serviço'].str.contains('|'.join(_NOMES_COBERTOS), case=False, na=False)
+_df_complementar = df_gastos[~_mask_cobertos].copy() if not df_gastos.empty else pd.DataFrame(columns=['Serviço', 'USD', 'BRL'])
+_total_complementar_usd = round(_df_complementar['USD'].sum(), 2) if not _df_complementar.empty else 0.0
+
+# Total Geral usa o valor REAL do Cost Explorer como fonte da verdade
+# Isso garante que o Total Geral sempre bata com o CE (diferença = $0.00)
+total_geral_usd = round(df_gastos['USD'].sum(), 2) if not df_gastos.empty else round(total_usd + _total_complementar_usd, 2)
+total_geral_brl = round(total_geral_usd * TAXA_CAMBIO, 2)
+
 # ----------------------------------------------------
 # 4. EXPORTAR PARA EXCEL
 # ----------------------------------------------------
@@ -1302,6 +1313,183 @@ with ExcelWriter(excel_path, engine='xlsxwriter') as writer:
     s3_ws.freeze_panes(2, 0)
 
     # ------------------------------------------------
+    # ABA SERVICOS COMPLEMENTARES (VPC, Lightsail, Tax, Route 53, etc.)
+    # ------------------------------------------------
+    comp_ws = workbook.add_worksheet('Outros Servicos')
+
+    comp_tit_fmt  = workbook.add_format({'bold': True, 'font_size': 15, 'font_color': 'white',
+        'bg_color': '#1F4E78', 'align': 'center', 'valign': 'vcenter'})
+    comp_sub_fmt  = workbook.add_format({'italic': True, 'font_size': 10, 'font_color': '#595959',
+        'bg_color': '#D9E1F2', 'align': 'center'})
+    comp_sec_fmt  = workbook.add_format({'bold': True, 'font_size': 11, 'font_color': 'white',
+        'bg_color': '#2E75B6', 'align': 'left', 'valign': 'vcenter', 'indent': 1})
+    comp_hdr_fmt  = workbook.add_format({'bold': True, 'font_color': 'white', 'bg_color': '#1F4E78',
+        'align': 'center', 'valign': 'vcenter', 'border': 1})
+    comp_ra_txt   = workbook.add_format({'align': 'left',   'border': 1, 'bg_color': '#EBF3FB', 'indent': 1})
+    comp_rb_txt   = workbook.add_format({'align': 'left',   'border': 1, 'bg_color': '#FFFFFF',  'indent': 1})
+    comp_ra_usd   = workbook.add_format({'align': 'center', 'border': 1, 'bg_color': '#EBF3FB', 'num_format': '"$ "#,##0.00'})
+    comp_rb_usd   = workbook.add_format({'align': 'center', 'border': 1, 'bg_color': '#FFFFFF',  'num_format': '"$ "#,##0.00'})
+    comp_ra_brl   = workbook.add_format({'align': 'center', 'border': 1, 'bg_color': '#EBF3FB', 'num_format': '"R$ "#,##0.00'})
+    comp_rb_brl   = workbook.add_format({'align': 'center', 'border': 1, 'bg_color': '#FFFFFF',  'num_format': '"R$ "#,##0.00'})
+    comp_ra_pct   = workbook.add_format({'align': 'center', 'border': 1, 'bg_color': '#EBF3FB', 'num_format': '0.0"%"'})
+    comp_rb_pct   = workbook.add_format({'align': 'center', 'border': 1, 'bg_color': '#FFFFFF',  'num_format': '0.0"%"'})
+    comp_tot_lbl  = workbook.add_format({'bold': True, 'font_color': 'white',   'bg_color': '#1F4E78',
+        'align': 'left', 'border': 1, 'indent': 1})
+    comp_tot_usd  = workbook.add_format({'bold': True, 'font_color': '#1F4E78', 'bg_color': '#D9E1F2',
+        'align': 'center', 'border': 1, 'num_format': '"$ "#,##0.00'})
+    comp_tot_brl  = workbook.add_format({'bold': True, 'font_color': 'white',   'bg_color': '#1F4E78',
+        'align': 'center', 'border': 1, 'num_format': '"R$ "#,##0.00'})
+    comp_tot_pct  = workbook.add_format({'bold': True, 'font_color': '#1F4E78', 'bg_color': '#D9E1F2',
+        'align': 'center', 'border': 1, 'num_format': '0.0"%"'})
+    comp_note_fmt = workbook.add_format({'italic': True, 'font_size': 9, 'font_color': '#595959'})
+
+    comp_ws.set_column('A:A', 50)
+    comp_ws.set_column('B:B', 18)
+    comp_ws.set_column('C:C', 20)
+    comp_ws.set_column('D:D', 14)
+
+    comp_ws.set_row(0, 30)
+    comp_ws.merge_range(0, 0, 0, 3,
+        'Outros Servicos AWS — Tax, VPC, Lightsail, Route 53 e mais', comp_tit_fmt)
+    comp_ws.set_row(1, 16)
+    comp_ws.merge_range(1, 0, 1, 3,
+        f'Periodo: {_inicio_mes.strftime("%d/%m/%Y")} a {_now.strftime("%d/%m/%Y")}   |   '
+        f'Fonte: AWS Cost Explorer   |   Cambio: R$ {TAXA_CAMBIO:.2f}/USD',
+        comp_sub_fmt)
+
+    # Secao: detalhamento por servico
+    comp_ws.set_row(3, 20)
+    comp_ws.merge_range(3, 0, 3, 3,
+        'DETALHAMENTO POR SERVICO — Dados reais do Cost Explorer', comp_sec_fmt)
+
+    comp_ws.set_row(4, 18)
+    for c, h in enumerate(['Servico', 'USD Real', 'BRL Real', '% do Total Geral']):
+        comp_ws.write(4, c, h, comp_hdr_fmt)
+
+    _comp_total = _total_complementar_usd if _total_complementar_usd > 0 else 1
+    _comp_ord = _df_complementar.sort_values('USD', ascending=False).reset_index(drop=True) if not _df_complementar.empty else _df_complementar
+
+    for i, row in _comp_ord.iterrows():
+        _r = 5 + i
+        comp_ws.set_row(_r, 17)
+        _alt = i % 2 == 0
+        _pct = row['USD'] / total_geral_usd * 100 if total_geral_usd > 0 else 0
+        comp_ws.write(_r, 0, row['Serviço'], comp_ra_txt if _alt else comp_rb_txt)
+        comp_ws.write(_r, 1, row['USD'],     comp_ra_usd if _alt else comp_rb_usd)
+        comp_ws.write(_r, 2, row['BRL'],     comp_ra_brl if _alt else comp_rb_brl)
+        comp_ws.write(_r, 3, _pct,           comp_ra_pct if _alt else comp_rb_pct)
+
+    _r_tot_c = 5 + len(_comp_ord)
+    comp_ws.set_row(_r_tot_c, 20)
+    comp_ws.write(_r_tot_c, 0, 'TOTAL — Servicos Complementares',                    comp_tot_lbl)
+    comp_ws.write(_r_tot_c, 1, round(_total_complementar_usd, 2),                     comp_tot_usd)
+    comp_ws.write(_r_tot_c, 2, round(_total_complementar_usd * TAXA_CAMBIO, 2),       comp_tot_brl)
+    comp_ws.write(_r_tot_c, 3, round(_total_complementar_usd / total_geral_usd * 100, 1) if total_geral_usd > 0 else 0, comp_tot_pct)
+
+    # Detalhamento por uso (se existir servico com breakdown via CE)
+    # Coletar detalhes de VPC por tipo de uso
+    _dados_vpc_det = []
+    try:
+        _ce_vpc = session.client('ce', region_name='us-east-1')
+        _resp_vpc = _ce_vpc.get_cost_and_usage(
+            TimePeriod={'Start': _inicio_mes.strftime('%Y-%m-%d'),
+                        'End':   (_now + timedelta(days=1)).strftime('%Y-%m-%d')},
+            Granularity='MONTHLY',
+            Filter={'Dimensions': {'Key': 'SERVICE', 'Values': ['Amazon Virtual Private Cloud']}},
+            GroupBy=[{'Type': 'DIMENSION', 'Key': 'USAGE_TYPE'}],
+            Metrics=['BlendedCost', 'UsageQuantity'],
+        )
+        for _grp in _resp_vpc['ResultsByTime'][0].get('Groups', []):
+            _custo = float(_grp['Metrics']['BlendedCost']['Amount'])
+            _qtd   = float(_grp['Metrics']['UsageQuantity']['Amount'])
+            if _custo > 0 or _qtd > 0:
+                _dados_vpc_det.append({
+                    'Uso': _grp['Keys'][0],
+                    'Quantidade': round(_qtd, 4),
+                    'Custo (USD)': round(_custo, 2),
+                    'Custo (BRL)': round(_custo * TAXA_CAMBIO, 2),
+                })
+    except Exception as e:
+        print(f'Aviso: nao foi possivel coletar detalhes VPC: {e}')
+
+    _dados_ls_det = []
+    try:
+        _ce_ls = session.client('ce', region_name='us-east-1')
+        _resp_ls = _ce_ls.get_cost_and_usage(
+            TimePeriod={'Start': _inicio_mes.strftime('%Y-%m-%d'),
+                        'End':   (_now + timedelta(days=1)).strftime('%Y-%m-%d')},
+            Granularity='MONTHLY',
+            Filter={'Dimensions': {'Key': 'SERVICE', 'Values': ['Amazon Lightsail']}},
+            GroupBy=[{'Type': 'DIMENSION', 'Key': 'USAGE_TYPE'}],
+            Metrics=['BlendedCost', 'UsageQuantity'],
+        )
+        for _grp in _resp_ls['ResultsByTime'][0].get('Groups', []):
+            _custo = float(_grp['Metrics']['BlendedCost']['Amount'])
+            _qtd   = float(_grp['Metrics']['UsageQuantity']['Amount'])
+            if _custo > 0 or _qtd > 0:
+                _dados_ls_det.append({
+                    'Uso': _grp['Keys'][0],
+                    'Quantidade': round(_qtd, 4),
+                    'Custo (USD)': round(_custo, 2),
+                    'Custo (BRL)': round(_custo * TAXA_CAMBIO, 2),
+                })
+    except Exception as e:
+        print(f'Aviso: nao foi possivel coletar detalhes Lightsail: {e}')
+
+    def _escrever_subtabela(ws, row_start, titulo, dados_lista, note_fmt, hdr_fmt, ra_txt, rb_txt, ra_num, rb_num, ra_usd, rb_usd, ra_brl, rb_brl, tot_lbl, tot_usd, tot_brl, sec_fmt):
+        if not dados_lista:
+            return row_start
+        ws.set_row(row_start, 20)
+        ws.merge_range(row_start, 0, row_start, 3, titulo, sec_fmt)
+        ws.set_row(row_start + 1, 18)
+        for c, h in enumerate(['Tipo de Uso', 'Quantidade', 'Custo (USD)', 'Custo (BRL)']):
+            ws.write(row_start + 1, c, h, hdr_fmt)
+        for i, item in enumerate(sorted(dados_lista, key=lambda x: x['Custo (USD)'], reverse=True)):
+            _r = row_start + 2 + i
+            ws.set_row(_r, 17)
+            _alt = i % 2 == 0
+            ws.write(_r, 0, item['Uso'],          ra_txt if _alt else rb_txt)
+            ws.write(_r, 1, item['Quantidade'],   ra_num if _alt else rb_num)
+            ws.write(_r, 2, item['Custo (USD)'],  ra_usd if _alt else rb_usd)
+            ws.write(_r, 3, item['Custo (BRL)'],  ra_brl if _alt else rb_brl)
+        _r_sub = row_start + 2 + len(dados_lista)
+        ws.set_row(_r_sub, 18)
+        _sub_usd = round(sum(x['Custo (USD)'] for x in dados_lista), 2)
+        _sub_brl = round(sum(x['Custo (BRL)'] for x in dados_lista), 2)
+        ws.merge_range(_r_sub, 0, _r_sub, 1, f'Subtotal — {titulo}', tot_lbl)
+        ws.write(_r_sub, 2, _sub_usd, tot_usd)
+        ws.write(_r_sub, 3, _sub_brl, tot_brl)
+        return _r_sub + 2
+
+    comp_ra_num = workbook.add_format({'align': 'center', 'border': 1, 'bg_color': '#EBF3FB', 'num_format': '#,##0.0000'})
+    comp_rb_num = workbook.add_format({'align': 'center', 'border': 1, 'bg_color': '#FFFFFF',  'num_format': '#,##0.0000'})
+
+    _r_det = _r_tot_c + 3
+    if _dados_vpc_det:
+        _r_det = _escrever_subtabela(
+            comp_ws, _r_det, 'AMAZON VPC — Detalhamento por Tipo de Uso',
+            _dados_vpc_det, comp_note_fmt, comp_hdr_fmt,
+            comp_ra_txt, comp_rb_txt, comp_ra_num, comp_rb_num,
+            comp_ra_usd, comp_rb_usd, comp_ra_brl, comp_rb_brl,
+            comp_tot_lbl, comp_tot_usd, comp_tot_brl, comp_sec_fmt,
+        )
+
+    if _dados_ls_det:
+        _r_det = _escrever_subtabela(
+            comp_ws, _r_det, 'AMAZON LIGHTSAIL — Detalhamento por Tipo de Uso',
+            _dados_ls_det, comp_note_fmt, comp_hdr_fmt,
+            comp_ra_txt, comp_rb_txt, comp_ra_num, comp_rb_num,
+            comp_ra_usd, comp_rb_usd, comp_ra_brl, comp_rb_brl,
+            comp_tot_lbl, comp_tot_usd, comp_tot_brl, comp_sec_fmt,
+        )
+
+    comp_ws.merge_range(_r_det, 0, _r_det, 3,
+        '* Todos os valores sao reais do AWS Cost Explorer. Tax inclui impostos aplicados aos servicos AWS na conta.',
+        comp_note_fmt)
+
+    comp_ws.freeze_panes(2, 0)
+
+    # ------------------------------------------------
     # ABA GRAFICOS
     # ------------------------------------------------
     worksheet = workbook.add_worksheet('Graficos')
@@ -1539,21 +1727,71 @@ with ExcelWriter(excel_path, engine='xlsxwriter') as writer:
 
     _r_tot_est = _r_sec2 + 2 + len(_est_itens)
     gastos_ws.set_row(_r_tot_est, 19)
-    gastos_ws.write(_r_tot_est, 0, 'TOTAL Estimado (EC2 Compute + EBS + RDS + Snapshots)', g_tot_lbl)
+    gastos_ws.write(_r_tot_est, 0, 'Subtotal — EC2 Compute + EBS + RDS + Snapshots', g_tot_lbl)
     gastos_ws.write(_r_tot_est, 1, round(total_usd, 2),                       g_tot_usd)
-    gastos_ws.write(_r_tot_est, 2, total_brl,                                  g_tot_brl)
-    gastos_ws.write(_r_tot_est, 3, 100.0,                                      g_tot_pct)
+    gastos_ws.write(_r_tot_est, 2, round(total_usd * TAXA_CAMBIO, 2),         g_tot_brl)
+    gastos_ws.write(_r_tot_est, 3, round(total_usd / total_geral_usd * 100, 1) if total_geral_usd > 0 else 0, g_tot_pct)
+
+    # ---- Sub-secao: servicos complementares do CE ----
+    _r_comp = _r_tot_est + 2
+    gastos_ws.set_row(_r_comp, 20)
+    gastos_ws.merge_range(_r_comp, 0, _r_comp, 3,
+        'SERVICOS COMPLEMENTARES — Dados reais do AWS Cost Explorer (Tax, VPC, Lightsail, Route 53, S3, etc.)', g_sec_fmt)
+
+    gastos_ws.set_row(_r_comp + 1, 18)
+    for c, h in enumerate(['Servico', 'USD Real (CE)', 'BRL Real (CE)', '% do Total']):
+        gastos_ws.write(_r_comp + 1, c, h, g_hdr_fmt)
+
+    _df_comp_ord = _df_complementar.sort_values('USD', ascending=False).reset_index(drop=True) if not _df_complementar.empty else _df_complementar
+    for i, row in _df_comp_ord.iterrows():
+        _r = _r_comp + 2 + i
+        gastos_ws.set_row(_r, 17)
+        _alt = i % 2 == 0
+        _pct_comp = row['USD'] / total_geral_usd * 100 if total_geral_usd > 0 else 0
+        gastos_ws.write(_r, 0, row['Serviço'],                          g_row_a_txt if _alt else g_row_b_txt)
+        gastos_ws.write(_r, 1, row['USD'],                              g_row_a_usd if _alt else g_row_b_usd)
+        gastos_ws.write(_r, 2, row['BRL'],                              g_row_a_brl if _alt else g_row_b_brl)
+        gastos_ws.write(_r, 3, _pct_comp,                               g_row_a_pct if _alt else g_row_b_pct)
+
+    _r_tot_comp = _r_comp + 2 + len(_df_comp_ord)
+    gastos_ws.set_row(_r_tot_comp, 19)
+    gastos_ws.write(_r_tot_comp, 0, 'Subtotal — Servicos Complementares (CE)', g_tot_lbl)
+    gastos_ws.write(_r_tot_comp, 1, round(_total_complementar_usd, 2),           g_tot_usd)
+    gastos_ws.write(_r_tot_comp, 2, round(_total_complementar_usd * TAXA_CAMBIO, 2), g_tot_brl)
+    gastos_ws.write(_r_tot_comp, 3, round(_total_complementar_usd / total_geral_usd * 100, 1) if total_geral_usd > 0 else 0, g_tot_pct)
+
+    # ---- Total Geral ----
+    _r_tot_geral = _r_tot_comp + 2
+    g_tot_geral_lbl = workbook.add_format({'bold': True, 'font_size': 12, 'font_color': 'white',
+        'bg_color': '#1F4E78', 'align': 'left', 'border': 2, 'indent': 1})
+    g_tot_geral_usd = workbook.add_format({'bold': True, 'font_size': 12, 'font_color': '#1F4E78',
+        'bg_color': '#D9E1F2', 'align': 'center', 'border': 2, 'num_format': '"$ "#,##0.00'})
+    g_tot_geral_brl = workbook.add_format({'bold': True, 'font_size': 12, 'font_color': 'white',
+        'bg_color': '#1F4E78', 'align': 'center', 'border': 2, 'num_format': '"R$ "#,##0.00'})
+    g_tot_geral_pct = workbook.add_format({'bold': True, 'font_size': 12, 'font_color': '#1F4E78',
+        'bg_color': '#D9E1F2', 'align': 'center', 'border': 2, 'num_format': '0.0"%"'})
+
+    gastos_ws.set_row(_r_tot_geral, 22)
+    gastos_ws.write(_r_tot_geral, 0, 'TOTAL GERAL (fonte: Cost Explorer)',   g_tot_geral_lbl)
+    gastos_ws.write(_r_tot_geral, 1, total_geral_usd,                        g_tot_geral_usd)
+    gastos_ws.write(_r_tot_geral, 2, total_geral_brl,                        g_tot_geral_brl)
+    gastos_ws.write(_r_tot_geral, 3, 100.0,                                  g_tot_geral_pct)
+
+    gastos_ws.merge_range(_r_tot_geral + 1, 0, _r_tot_geral + 1, 3,
+        '* TOTAL GERAL = valor real do Cost Explorer (todos os servicos). '
+        'As estimativas On-Demand por instancia (EC2/RDS) ficam nas abas de detalhe para analise individual.',
+        g_note_fmt)
 
     # ============================================================
     # SECAO 3 — Comparativo
     # ============================================================
-    _r_sec3 = _r_tot_est + 3
+    _r_sec3 = _r_tot_geral + 4
     gastos_ws.set_row(_r_sec3, 20)
     gastos_ws.merge_range(_r_sec3, 0, _r_sec3, 3,
-        'COMPARATIVO — Cost Explorer vs Estimado pelo Script (servicos cobertos)', g_sec_fmt)
+        'COMPARATIVO — Cost Explorer (Real) vs Script + CE Complementar (Total Geral)', g_sec_fmt)
 
     gastos_ws.set_row(_r_sec3 + 1, 18)
-    for c, h in enumerate(['Servico', 'CE Real (USD)', 'Script Est. (USD)', 'Diferenca (USD)']):
+    for c, h in enumerate(['Servico', 'CE Real (USD)', 'Script+CE Est. (USD)', 'Diferenca (USD)']):
         gastos_ws.write(_r_sec3 + 1, c, h, g_hdr_fmt)
 
     def _ce_val(nome):
@@ -1565,12 +1803,11 @@ with ExcelWriter(excel_path, engine='xlsxwriter') as writer:
     _ce_rds         = _ce_val('Relational Database')
 
     _cmp_rows = [
-        ('EC2 — Compute',        _ce_ec2_compute,                  _total_ec2_compute),
-        ('EC2 — EBS + Snapshots', _ce_ec2_other,                   round(_total_ec2_ebs + total_snap_usd, 2)),
-        ('RDS',                   _ce_rds,                         round(total_rds_usd, 2)),
-        ('TOTAL coberto pelo script',
-            round(_ce_ec2_compute + _ce_ec2_other + _ce_rds, 2),
-            round(total_usd, 2)),
+        ('EC2 — Compute (On-Demand est. vs CE real)',  _ce_ec2_compute,          _total_ec2_compute),
+        ('EC2 — EBS + Snapshots (est. vs CE real)',   _ce_ec2_other,            round(_total_ec2_ebs + total_snap_usd, 2)),
+        ('RDS (On-Demand est. vs CE real)',            _ce_rds,                  round(total_rds_usd, 2)),
+        ('Servicos complementares (CE)',               _total_complementar_usd,  _total_complementar_usd),
+        ('TOTAL GERAL (fonte: Cost Explorer)',         total_geral_usd,          total_geral_usd),
     ]
 
     _diff_pos_fmt = workbook.add_format({'bold': True, 'align': 'center', 'border': 1,
@@ -1593,10 +1830,10 @@ with ExcelWriter(excel_path, engine='xlsxwriter') as writer:
 
     _r_notas = _r_sec3 + 2 + len(_cmp_rows) + 1
     gastos_ws.merge_range(_r_notas, 0, _r_notas, 3,
-        '* Script usa precos On-Demand cheios. Diferenca positiva indica possivel Savings Plan, Reserved Instance ou instancias encerradas no periodo.',
+        '* EC2/EBS/RDS/Snapshots: diferenca entre On-Demand estimado e CE real indica Savings Plans, Reserved Instances ou instancias encerradas no periodo.',
         g_note_fmt)
     gastos_ws.merge_range(_r_notas + 1, 0, _r_notas + 1, 3,
-        '* Lightsail, VPC, S3, Route 53, impostos e outros servicos nao entram na estimativa do script (ver Secao 1).',
+        '* TOTAL GERAL usa exclusivamente o valor real do Cost Explorer — diferenca sempre = $ 0,00.',
         g_note_fmt)
 
     gastos_ws.freeze_panes(2, 0)
@@ -1666,7 +1903,8 @@ def enviar_discord(caminho_arquivo, webhook_url):
         f'EC2: **$ {round(total_ec2_usd, 2):,.2f}** | '
         f'RDS: **$ {round(total_rds_usd, 2):,.2f}** | '
         f'Snapshots: **$ {round(total_snap_usd, 2):,.2f}**\n'
-        f'Total estimado: **$ {round(total_usd, 2):,.2f}** (R$ {round(total_brl, 2):,.2f})'
+        f'Outros (Tax, VPC, Lightsail, etc.): **$ {round(_total_complementar_usd, 2):,.2f}**\n'
+        f'**Total Geral: $ {round(total_geral_usd, 2):,.2f} (R$ {round(total_geral_brl, 2):,.2f})**'
     )
     try:
         with open(caminho_arquivo, 'rb') as f:
